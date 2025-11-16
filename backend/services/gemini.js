@@ -39,7 +39,7 @@ export async function generateGeminiResponse(userMessage, conversationContext = 
 
     // Generate content using the models.generateContent method
     const result = await genAI.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: "gemini-2.5-flash-lite",
       contents: prompt
     });
     
@@ -70,7 +70,7 @@ export async function testGeminiConnection() {
     }
 
     const result = await genAI.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: "gemini-2.5-flash-lite",
       contents: "Hello"
     });
     
