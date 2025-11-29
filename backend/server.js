@@ -24,6 +24,21 @@ const originalResponseStorage = new Map();
 app.use(cors());
 app.use(express.json());
 
+// Root route handler for debugging
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'Backend API is running',
+    endpoints: [
+      'GET /api/conversations',
+      'POST /api/conversations',
+      'GET /api/conversations/:treeId',
+      'POST /api/conversations/:treeId/messages',
+      'POST /api/enhanced-learning/reprompt',
+      'GET /api/test-gemini'
+    ]
+  });
+});
+
 // Create a new conversation tree
 app.post('/api/conversations', async (req, res) => {
   try {

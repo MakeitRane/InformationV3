@@ -1,11 +1,9 @@
 // Vercel Serverless Function entry point
-// This file is located at backend/api/index.js
-// Vercel will automatically route requests to /api/* to this function
-// We simply re-export the Express app from server.js
+// This file handles all /api/* routes
 
 import app from '../server.js';
 
-// Vercel expects a default export that handles HTTP requests
-// Since server.js exports the Express app, we can just re-export it
+// Export the Express app as the handler
+// Vercel will call this function for requests matching /api/*
 export default app;
 
