@@ -7,7 +7,7 @@ compatibility_date = "2025-01-01"
 # Replace this with your actual Vercel backend URL after deployment
 # Example: "https://your-backend-project.vercel.app"
 # IMPORTANT: No trailing slash - just the base domain
-BACKEND_ORIGIN = "https://your-backend-project.vercel.app"
+BACKEND_ORIGIN = "https://v3-information.vercel.app"
 
 [[durable_objects.bindings]]
 name = "RATE_LIMITER"

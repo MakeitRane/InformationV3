@@ -1,6 +1,6 @@
 # Vercel Backend Deployment Guide
 
-This guide walks you through deploying your backend to Vercel and connecting it to the Cloudflare rate limiter.
+This guide walks you through deploying your backend to Vercel.
 
 ## What Was Changed
 
@@ -49,36 +49,13 @@ git push
 After deployment completes:
 
 1. You'll see a deployment URL like: `https://your-project-name.vercel.app`
-2. **Copy this URL** - this is your `BACKEND_ORIGIN`
+2. **Copy this URL** - this is your backend API URL
 3. Test it by visiting: `https://your-project-name.vercel.app/api/conversations`
    - You should get a response (even if it's an error, that means the server is running)
 
-### Step 4: Update Cloudflare Worker Configuration
+### Step 4: Update Frontend to Use Vercel Backend
 
-1. **Open** `cloudflare-rate-limiter/wrangler.toml`
-2. **Update** the `BACKEND_ORIGIN` variable:
-
-```toml
-[vars]
-BACKEND_ORIGIN = "https://your-project-name.vercel.app"
-```
-
-Replace `your-project-name.vercel.app` with your actual Vercel URL (no trailing slash).
-
-3. **Deploy the Cloudflare Worker**:
-
-```bash
-cd cloudflare-rate-limiter
-wrangler deploy
-```
-
-### Step 5: Update Frontend to Use Cloudflare Worker
-
-1. **Get your Cloudflare Worker URL**:
-   - After deploying, you'll get a URL like: `https://chat-gpt-tree-rate-limiter.your-subdomain.workers.dev`
-   - Or if you set up a custom domain: `https://api.yourdomain.com`
-
-2. **Update frontend API configuration**:
+1. **Update frontend API configuration**:
    - Open `frontend/src/api.js` (or wherever you set `API_URL`)
    - Change from:
      ```js
@@ -86,7 +63,7 @@ wrangler deploy
      ```
    - To:
      ```js
-     const API_URL = 'https://your-worker-url.workers.dev/api';
+     const API_URL = 'https://your-project-name.vercel.app/api';
      ```
    - Or use an environment variable:
      ```js
@@ -94,11 +71,10 @@ wrangler deploy
      ```
    - Then set `REACT_APP_API_URL` in your frontend's deployment environment
 
-### Step 6: Test the Full Flow
+### Step 5: Test the Deployment
 
 1. **Test backend directly**: `https://your-backend.vercel.app/api/test-gemini`
-2. **Test through rate limiter**: `https://your-worker.workers.dev/api/test-gemini`
-3. **Test from frontend**: Make a request through your React app
+2. **Test from frontend**: Make a request through your React app
 
 ## Troubleshooting
 
@@ -108,11 +84,10 @@ wrangler deploy
 - Check that Root Directory in Vercel is set to `backend`
 - Verify `api/index.js` exists and exports the app correctly
 
-### Rate limiter can't reach backend
+### CORS errors
 
-- Verify `BACKEND_ORIGIN` in `wrangler.toml` has no trailing slash
-- Check that your Vercel backend URL is correct
 - Ensure CORS is configured in your backend (should already be set with `app.use(cors())`)
+- Check that your frontend domain is allowed in CORS settings if you have specific origins configured
 
 ### Environment variables not working
 
@@ -137,14 +112,8 @@ The server will start on `http://localhost:3001` as before.
 ```
 Frontend (Browser)
     ↓
-Cloudflare Worker (Rate Limiter)
-    ↓
 Vercel Backend (Serverless Functions)
     ↓
 Gemini API
 ```
-
-All requests flow through the rate limiter, which enforces:
-- 3 requests per second per IP
-- 100 requests per calendar day (EST) per IP
 
