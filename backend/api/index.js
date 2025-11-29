@@ -1,9 +1,9 @@
 // Vercel Serverless Function entry point
-// This file handles all /api/* routes
+// This file handles all requests and routes them through Express
 
 import app from '../server.js';
 
-// Export the Express app as the handler
-// Vercel will call this function for requests matching /api/*
+// Vercel serverless function handler
+// The Express app is already configured to handle all routes
 export default app;
 
