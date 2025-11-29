@@ -12,10 +12,14 @@ const port = process.env.PORT || 3001;
 import { TreeManager } from './tree_manager.js';
 
 // Import the Gemini AI service
-import { generateGeminiResponse, testGeminiConnection } from './services/gemini.js';
+import { generateGeminiResponse, generateGeminiRepromptResponse, testGeminiConnection } from './services/gemini.js';
 
 // Initialize the tree manager
 const treeManager = new TreeManager();
+
+// Temporary storage for original responses before reprompt truncation
+// Structure: Map<messageId, { originalContent: string, repromptHistory: Array }>
+const originalResponseStorage = new Map();
 
 app.use(cors());
 app.use(express.json());
@@ -174,6 +178,78 @@ app.get('/api/test-gemini', async (req, res) => {
     });
   } catch (err) {
     console.error('Error testing Gemini connection:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reprompt endpoint for enhanced learning mode
+app.post('/api/enhanced-learning/reprompt', async (req, res) => {
+  try {
+    const { userMessage, previousContext, messageId, originalContent } = req.body;
+    
+    if (!userMessage) {
+      return res.status(400).json({ error: 'User message is required' });
+    }
+    
+    console.log('Reprompting with context:', { userMessage, contextLength: previousContext?.length || 0, messageId });
+    
+    // Store original content if provided and not already stored (first reprompt only)
+    if (messageId && originalContent) {
+      if (!originalResponseStorage.has(messageId)) {
+        originalResponseStorage.set(messageId, {
+          originalContent: originalContent,
+          repromptHistory: [],
+          createdAt: new Date().toISOString()
+        });
+        console.log('Stored original content for message:', messageId);
+      }
+      
+      // Add to reprompt history (safe access)
+      const storage = originalResponseStorage.get(messageId);
+      if (storage && storage.repromptHistory) {
+        storage.repromptHistory.push({
+          query: userMessage,
+          timestamp: new Date().toISOString(),
+          contextLength: previousContext?.length || 0
+        });
+      }
+    }
+    
+    // Generate AI response using Gemini with previous response as context springboard
+    const aiResponse = await generateGeminiRepromptResponse(userMessage, previousContext || '');
+    console.log('Reprompt response generated, length:', aiResponse.length);
+    
+    res.json({
+      message: 'Reprompt successful',
+      ai_response: aiResponse
+    });
+  } catch (err) {
+    console.error('Error reprompting:', err);
+    console.error('Error stack:', err.stack);
+    res.status(500).json({ 
+      error: err.message || 'Internal server error',
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+// Get original content before reprompt truncation
+app.get('/api/enhanced-learning/original/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    
+    const storage = originalResponseStorage.get(messageId);
+    if (!storage) {
+      return res.status(404).json({ error: 'Original content not found for this message' });
+    }
+    
+    res.json({
+      originalContent: storage.originalContent,
+      repromptHistory: storage.repromptHistory,
+      createdAt: storage.createdAt
+    });
+  } catch (err) {
+    console.error('Error retrieving original content:', err);
     res.status(500).json({ error: err.message });
   }
 });
