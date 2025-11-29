@@ -332,6 +332,13 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-}); 
+// Export the Express app for Vercel Serverless Functions
+export default app;
+
+// Only start the server if running locally (not in Vercel serverless environment)
+// Vercel sets VERCEL=1, so we check for that to avoid calling listen()
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+} 

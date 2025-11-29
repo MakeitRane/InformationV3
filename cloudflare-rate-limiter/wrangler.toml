@@ -4,8 +4,10 @@ compatibility_date = "2025-01-01"
 
 [vars]
 # Origin of your backend that calls Gemini.
-# Example: "https://your-backend.example.com"
-BACKEND_ORIGIN = "https://information-v3.vercel.app/"
+# Replace this with your actual Vercel backend URL after deployment
+# Example: "https://your-backend-project.vercel.app"
+# IMPORTANT: No trailing slash - just the base domain
+BACKEND_ORIGIN = "https://your-backend-project.vercel.app"
 
 [[durable_objects.bindings]]
 name = "RATE_LIMITER"
