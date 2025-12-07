@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "start:clean": "lsof -ti:3001 | xargs kill -9 2>/dev/null || true && node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
