@@ -3,8 +3,19 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Initialize the Gemini AI client
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
+// Initialize the Gemini AI client lazily to avoid errors if API key is not set
+let genAI = null;
+
+function getGenAI() {
+  if (!genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+      throw new Error('Gemini API key not configured. Please set GEMINI_API_KEY in your environment variables.');
+    }
+    genAI = new GoogleGenAI(apiKey);
+  }
+  return genAI;
+}
 
 /**
  * Generate AI response using Google Gemini
@@ -49,7 +60,7 @@ export async function generateGeminiResponse(userMessage, conversationContext = 
     const prompt = conversationHistory + highlightedContext + formattingInstructions + `User: ${userMessage}\nAI:`;
 
     // Generate content using the models.generateContent method
-    const result = await genAI.models.generateContent({
+    const result = await getGenAI().models.generateContent({
       model: "gemini-2.5-flash-lite",
       contents: prompt
     });
@@ -113,7 +124,7 @@ export async function generateGeminiRepromptResponse(userMessage, previousContex
 
     // Generate content using the models.generateContent method
     console.log('Calling Gemini API for reprompt with model: gemini-2.5-flash-lite');
-    const result = await genAI.models.generateContent({
+    const result = await getGenAI().models.generateContent({
       model: "gemini-2.5-flash-lite",
       contents: prompt
     });
@@ -166,7 +177,7 @@ export async function testGeminiConnection() {
       return false;
     }
 
-    const result = await genAI.models.generateContent({
+    const result = await getGenAI().models.generateContent({
       model: "gemini-2.5-flash-lite",
       contents: "Hello"
     });

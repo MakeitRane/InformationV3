@@ -81,14 +81,82 @@ function EnhancedLearningApp() {
       
       Object.keys(reprompts).forEach(messageId => {
         if (reprompts[messageId] && reprompts[messageId].length > 0) {
+          // Find the message in current conversation to get its current content
+          const message = currentConversation.find(msg => msg._id === messageId);
+          if (!message) return;
+          
+          // Parse the current content to get current chunk structure
+          const currentChunks = parseTextIntoChunks(message.content);
+          
           reprompts[messageId].forEach((reprompt, index) => {
-            const chunkElement = document.getElementById(`chunk-${messageId}-${reprompt.chunkIndex}`);
+            // Use the stored chunkIndex (which should be recalculated if content changed)
+            let chunkIndex = reprompt.chunkIndex;
+            
+            // Ensure chunk index is within bounds
+            if (chunkIndex < 0) {
+              chunkIndex = 0;
+            } else if (chunkIndex >= currentChunks.length) {
+              chunkIndex = Math.max(0, currentChunks.length - 1);
+            }
+            
+            // Try to find the chunk element
+            const chunkElement = document.getElementById(`chunk-${messageId}-${chunkIndex}`);
             
             if (chunkElement) {
               const containerRect = container.getBoundingClientRect();
               const chunkRect = chunkElement.getBoundingClientRect();
-              // Position relative to viewport top (for fixed positioning)
-              positions[`${messageId}-${index}`] = chunkRect.top - containerRect.top;
+              // Position relative to container top (for fixed positioning)
+              positions[`${messageId}-${index}`] = chunkRect.top - containerRect.top + container.scrollTop;
+            } else {
+              // If chunk not found, try to find the closest valid chunk
+              // First try chunks near the target index
+              let foundElement = null;
+              let foundIndex = -1;
+              
+              // Search in a small range around the target index
+              for (let offset = 0; offset < Math.max(5, currentChunks.length); offset++) {
+                const tryIndex1 = chunkIndex + offset;
+                const tryIndex2 = chunkIndex - offset;
+                
+                if (tryIndex1 < currentChunks.length) {
+                  const element1 = document.getElementById(`chunk-${messageId}-${tryIndex1}`);
+                  if (element1) {
+                    foundElement = element1;
+                    foundIndex = tryIndex1;
+                    break;
+                  }
+                }
+                
+                if (tryIndex2 >= 0) {
+                  const element2 = document.getElementById(`chunk-${messageId}-${tryIndex2}`);
+                  if (element2) {
+                    foundElement = element2;
+                    foundIndex = tryIndex2;
+                    break;
+                  }
+                }
+              }
+              
+              // If still not found, try any chunk for this message
+              if (!foundElement) {
+                for (let i = 0; i < currentChunks.length; i++) {
+                  const fallbackElement = document.getElementById(`chunk-${messageId}-${i}`);
+                  if (fallbackElement) {
+                    foundElement = fallbackElement;
+                    foundIndex = i;
+                    break;
+                  }
+                }
+              }
+              
+              if (foundElement) {
+                const containerRect = container.getBoundingClientRect();
+                const chunkRect = foundElement.getBoundingClientRect();
+                positions[`${messageId}-${index}`] = chunkRect.top - containerRect.top + container.scrollTop;
+              } else {
+                // Last resort: use estimated position based on chunk index
+                positions[`${messageId}-${index}`] = chunkIndex * 50;
+              }
             }
           });
         }
@@ -97,7 +165,14 @@ function EnhancedLearningApp() {
     };
 
     // Initial update with delay to ensure DOM is ready
-    const timeoutId = setTimeout(updateRepromptPositions, 100);
+    // Use requestAnimationFrame for better timing
+    const updateWithDelay = () => {
+      requestAnimationFrame(() => {
+        setTimeout(updateRepromptPositions, 100);
+      });
+    };
+    
+    updateWithDelay();
     updateRepromptPositions();
 
     // Update on scroll
@@ -108,16 +183,16 @@ function EnhancedLearningApp() {
       window.addEventListener('scroll', updateRepromptPositions);
     }
 
-    // Use MutationObserver to detect when chunks are added
+    // Use MutationObserver to detect when chunks are added or changed
     const observer = new MutationObserver(() => {
-      setTimeout(updateRepromptPositions, 50);
+      // Use a small delay to ensure DOM is fully updated
+      setTimeout(updateRepromptPositions, 100);
     });
     if (container) {
-      observer.observe(container, { childList: true, subtree: true });
+      observer.observe(container, { childList: true, subtree: true, attributes: true });
     }
 
     return () => {
-      clearTimeout(timeoutId);
       if (container) {
         container.removeEventListener('scroll', updateRepromptPositions);
         window.removeEventListener('resize', updateRepromptPositions);
@@ -335,20 +410,160 @@ function EnhancedLearningApp() {
     }
   };
 
-  const handleReprompt = async ({ messageId, newQuery, context, currentChunkIndex, repromptLocation }) => {
-    // Add reprompt annotation immediately on submit
-    setReprompts(prev => ({
-      ...prev,
-      [messageId]: [
-        ...(prev[messageId] || []),
-        {
-          chunkIndex: repromptLocation,
-          query: newQuery,
-          timestamp: Date.now()
-        }
-      ]
-    }));
+  /**
+   * Recalculates chunk indices for reprompts when content changes.
+   * Maps old chunk indices to new chunk indices by matching text positions.
+   * 
+   * @param {string} oldContent - The original content before update
+   * @param {string} newContent - The updated content after reprompt
+   * @param {number} oldChunkIndex - The chunk index in the old content
+   * @returns {number} The corresponding chunk index in the new content
+   */
+  const recalculateChunkIndex = (oldContent, newContent, oldChunkIndex) => {
+    // Parse both contents into chunks
+    const oldChunks = parseTextIntoChunks(oldContent);
+    const newChunks = parseTextIntoChunks(newContent);
     
+    // If old chunk index is out of bounds, return a safe default
+    if (oldChunkIndex < 0 || oldChunkIndex >= oldChunks.length) {
+      return Math.max(0, Math.min(oldChunkIndex, newChunks.length - 1));
+    }
+    
+    // Build text up to and including the old chunk index
+    // This represents the content that should still exist in the new content
+    let textUpToOldChunk = '';
+    for (let i = 0; i <= oldChunkIndex && i < oldChunks.length; i++) {
+      const chunk = oldChunks[i];
+      if (chunk.hasSubheader && chunk.subheader) {
+        if (i > 0) textUpToOldChunk += '\n\n';
+        textUpToOldChunk += chunk.subheader + '\n\n';
+      } else if (i > 0 && oldChunks[i - 1]?.subheader !== chunk.subheader) {
+        if (chunk.subheader) {
+          textUpToOldChunk += '\n\n' + chunk.subheader + '\n\n';
+        }
+      }
+      textUpToOldChunk += chunk.fullText;
+      if (i < oldChunkIndex) {
+        textUpToOldChunk += ' ';
+      }
+    }
+    
+    // Normalize whitespace for comparison
+    const normalizedOldText = textUpToOldChunk.trim().replace(/\s+/g, ' ');
+    
+    // Find where this text appears in the new content
+    // Since we're appending new content, the old text should appear at the beginning
+    // But we need to account for potential whitespace differences
+    const normalizedNewContent = newContent.trim().replace(/\s+/g, ' ');
+    
+    // Try to find the position in new content
+    // The old content should be a prefix of the new content (before the new reprompt response)
+    let charPosition = -1;
+    if (normalizedNewContent.startsWith(normalizedOldText)) {
+      // Exact match at start - find character position
+      charPosition = normalizedOldText.length;
+    } else {
+      // Try to find a substring match (accounting for minor differences)
+      // Use a sliding window approach to find the best match
+      const searchLength = Math.min(normalizedOldText.length, normalizedNewContent.length);
+      let bestMatch = 0;
+      let bestMatchLength = 0;
+      
+      for (let i = 0; i <= normalizedNewContent.length - searchLength; i++) {
+        const substring = normalizedNewContent.substring(i, i + searchLength);
+        // Calculate similarity (simple character matching)
+        let matchLength = 0;
+        for (let j = 0; j < Math.min(substring.length, normalizedOldText.length); j++) {
+          if (substring[j] === normalizedOldText[j]) {
+            matchLength++;
+          } else {
+            break;
+          }
+        }
+        if (matchLength > bestMatchLength) {
+          bestMatchLength = matchLength;
+          bestMatch = i + matchLength;
+        }
+      }
+      
+      // If we found a reasonable match (at least 80% of the text), use it
+      if (bestMatchLength >= normalizedOldText.length * 0.8) {
+        charPosition = bestMatch;
+      } else {
+        // Fallback: assume the old content is at the start
+        charPosition = normalizedOldText.length;
+      }
+    }
+    
+    // Now find which chunk in the new content contains this character position
+    // Build up chunks and track character positions
+    let currentCharPos = 0;
+    for (let i = 0; i < newChunks.length; i++) {
+      const chunk = newChunks[i];
+      let chunkText = '';
+      
+      // Add subheader if present
+      if (chunk.hasSubheader && chunk.subheader) {
+        if (i > 0) chunkText += '\n\n';
+        chunkText += chunk.subheader + '\n\n';
+      } else if (i > 0 && newChunks[i - 1]?.subheader !== chunk.subheader) {
+        if (chunk.subheader) {
+          chunkText += '\n\n' + chunk.subheader + '\n\n';
+        }
+      }
+      chunkText += chunk.fullText;
+      if (i < newChunks.length - 1) {
+        chunkText += ' ';
+      }
+      
+      const chunkStart = currentCharPos;
+      const normalizedChunkText = chunkText.replace(/\s+/g, ' ');
+      const chunkEnd = currentCharPos + normalizedChunkText.length;
+      
+      // Check if our target position is within this chunk
+      if (charPosition >= chunkStart && charPosition <= chunkEnd) {
+        return i;
+      }
+      
+      currentCharPos = chunkEnd;
+    }
+    
+    // Fallback: if we couldn't find a match, return the closest chunk
+    // Use the old chunk index if it's valid, otherwise use the last chunk
+    if (oldChunkIndex < newChunks.length) {
+      return oldChunkIndex;
+    }
+    return Math.max(0, newChunks.length - 1);
+  };
+
+  /**
+   * Recalculates all reprompt chunk indices for a message when its content changes.
+   * 
+   * @param {string} messageId - The message ID
+   * @param {string} oldContent - The content before the update
+   * @param {string} newContent - The content after the update
+   */
+  const recalculateRepromptIndices = (messageId, oldContent, newContent) => {
+    setReprompts(prev => {
+      const messageReprompts = prev[messageId];
+      if (!messageReprompts || messageReprompts.length === 0) {
+        return prev;
+      }
+      
+      // Recalculate each reprompt's chunk index
+      const updatedReprompts = messageReprompts.map(reprompt => ({
+        ...reprompt,
+        chunkIndex: recalculateChunkIndex(oldContent, newContent, reprompt.chunkIndex)
+      }));
+      
+      return {
+        ...prev,
+        [messageId]: updatedReprompts
+      };
+    });
+  };
+
+  const handleReprompt = async ({ messageId, newQuery, context, currentChunkIndex, repromptLocation }) => {
     // Hide reprompt input
     setShowRepromptInput(false);
     setRepromptText('');
@@ -367,15 +582,18 @@ function EnhancedLearningApp() {
       // Store the FULL original content before any truncation
       const fullOriginalContent = originalMessage.content;
       
-      console.log('Reprompting:', { messageId, newQuery, contextLength: context.length, repromptLocation });
+      console.log('Reprompting:', { messageId, newQuery, contextLength: context.length, repromptLocation, currentChunkIndex });
       
       // Parse original content into chunks to find where to truncate
       const originalChunks = parseTextIntoChunks(fullOriginalContent);
       
-      // Truncate at the reprompt location chunk (include everything up to and including that chunk)
-      // repromptLocation is the index of the chunk where reprompt happened
+      // FIX 2: Always truncate at the END of visible content (currentChunkIndex - 1)
+      // This ensures the reprompt response always starts fresh after the previous content ends
+      const truncateAtChunk = currentChunkIndex - 1; // Last visible chunk index
+      
+      // Truncate at the end of visible content (include everything up to and including the last visible chunk)
       let truncatedContent = '';
-      for (let i = 0; i <= repromptLocation && i < originalChunks.length; i++) {
+      for (let i = 0; i <= truncateAtChunk && i < originalChunks.length; i++) {
         const chunk = originalChunks[i];
         // Add subheader if this is the first chunk of a new section
         if (chunk.hasSubheader && chunk.subheader) {
@@ -388,7 +606,7 @@ function EnhancedLearningApp() {
           }
         }
         truncatedContent += chunk.fullText;
-        if (i < repromptLocation) {
+        if (i < truncateAtChunk) {
           truncatedContent += ' ';
         }
       }
@@ -423,6 +641,49 @@ function EnhancedLearningApp() {
       updatedConversation[messageIndex] = updatedMessage;
       
       setCurrentConversation(updatedConversation);
+      
+      // SOLUTION 2: Recalculate all previous reprompt chunk indices synchronously
+      // This ensures that when content changes, all existing reprompts are remapped to correct chunks
+      const existingReprompts = reprompts[messageId] || [];
+      let recalculatedReprompts = [];
+      
+      if (existingReprompts.length > 0) {
+        // Recalculate indices for all existing reprompts synchronously
+        recalculatedReprompts = existingReprompts.map(reprompt => ({
+          ...reprompt,
+          chunkIndex: recalculateChunkIndex(fullOriginalContent, updatedContent, reprompt.chunkIndex)
+        }));
+      }
+      
+      // Parse the updated content to find the correct chunk index where the reprompt happened
+      // The reprompt happened at the end of the truncated content (truncateAtChunk)
+      // After re-parsing, we need to find which chunk in the updated content corresponds to that position
+      const updatedChunks = parseTextIntoChunks(updatedContent);
+      
+      // Calculate the new reprompt chunk index using the recalculation function
+      // This ensures consistency with how we recalculate previous reprompts
+      let repromptChunkIndex = recalculateChunkIndex(fullOriginalContent, updatedContent, truncateAtChunk);
+      
+      // Ensure we don't exceed the number of chunks
+      if (repromptChunkIndex >= updatedChunks.length) {
+        repromptChunkIndex = Math.max(0, updatedChunks.length - 1);
+      }
+      
+      // Update reprompts state with both recalculated and new reprompt
+      // Use setTimeout to ensure state updates happen after DOM updates
+      setTimeout(() => {
+        setReprompts(prev => ({
+          ...prev,
+          [messageId]: [
+            ...recalculatedReprompts,
+            {
+              chunkIndex: repromptChunkIndex,
+              query: newQuery,
+              timestamp: Date.now()
+            }
+          ]
+        }));
+      }, 200); // Delay to ensure DOM is updated
       
       // Keep the current chunk index (where reprompt happened) so we continue from there
       // The previous content (chunks 0 to repromptLocation) remains visible

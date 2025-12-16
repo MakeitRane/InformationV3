@@ -4,6 +4,6 @@
 import app from '../server.js';
 
 // Vercel serverless function handler
-// The Express app is already configured to handle all routes
+// Express app can be exported directly for Vercel
 export default app;
 
