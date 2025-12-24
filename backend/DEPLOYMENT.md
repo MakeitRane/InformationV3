@@ -36,8 +36,8 @@ git push
 5. **Environment Variables**:
    - Click **"Environment Variables"**
    - Add the following:
-     - **Name**: `GEMINI_API_KEY`
-     - **Value**: Your actual Gemini API key
+     - **Name**: `PERPLEXITY_API_KEY`
+     - **Value**: Your actual Perplexity API key
      - **Environment**: Select all (Production, Preview, Development)
    - Add any other environment variables your backend needs
 6. **Deploy**:
@@ -73,7 +73,7 @@ After deployment completes:
 
 ### Step 5: Test the Deployment
 
-1. **Test backend directly**: `https://your-backend.vercel.app/api/test-gemini`
+1. **Test backend directly**: `https://your-backend.vercel.app/api/test-perplexity`
 2. **Test from frontend**: Make a request through your React app
 
 ## Troubleshooting
@@ -91,7 +91,7 @@ After deployment completes:
 
 ### Environment variables not working
 
-- Make sure `GEMINI_API_KEY` is set in Vercel project settings
+- Make sure `PERPLEXITY_API_KEY` is set in Vercel project settings
 - Redeploy after adding environment variables
 - Check Vercel logs for errors
 
@@ -114,6 +114,6 @@ Frontend (Browser)
     ↓
 Vercel Backend (Serverless Functions)
     ↓
-Gemini API
+Perplexity API
 ```
 

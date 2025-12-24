@@ -47,5 +47,5 @@ If the current setup doesn't work, try:
 
 ### 6. Check Environment Variables
 
-Make sure `GEMINI_API_KEY` is set in Vercel project settings.
+Make sure `PERPLEXITY_API_KEY` is set in Vercel project settings.
 

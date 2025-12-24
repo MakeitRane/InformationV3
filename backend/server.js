@@ -11,8 +11,8 @@ const port = process.env.PORT || 3001;
 // Import the TreeManager
 import { TreeManager } from './tree_manager.js';
 
-// Import the Gemini AI service
-import { generateGeminiResponse, generateGeminiRepromptResponse, testGeminiConnection } from './services/gemini.js';
+// Import the Perplexity AI service
+import { generatePerplexityResponse, generatePerplexityRepromptResponse, testPerplexityConnection } from './services/perplexity.js';
 
 // Initialize the tree manager
 const treeManager = new TreeManager();
@@ -34,7 +34,7 @@ app.get('/', (req, res) => {
       'GET /api/conversations/:treeId',
       'POST /api/conversations/:treeId/messages',
       'POST /api/enhanced-learning/reprompt',
-      'GET /api/test-gemini'
+      'GET /api/test-perplexity'
     ]
   });
 });
@@ -48,8 +48,8 @@ app.post('/api/conversations', async (req, res) => {
       return res.status(400).json({ error: 'User message is required' });
     }
     
-    // Generate AI response using Gemini
-    const aiResponse = await generateGeminiResponse(userMessage);
+    // Generate AI response using Perplexity
+    const aiResponse = await generatePerplexityResponse(userMessage);
     
     // Create a new tree with the first message
     const treeId = treeManager.createNewTree(userMessage, aiResponse);
@@ -142,8 +142,8 @@ app.post('/api/conversations/:treeId/messages', async (req, res) => {
     const conversationContext = treeManager.getTreeConversation(treeId) || [];
     console.log('Conversation context length:', conversationContext.length);
     
-    // Generate AI response using Gemini with context and highlighted text
-    const aiResponse = await generateGeminiResponse(userMessage, conversationContext, highlightedText);
+    // Generate AI response using Perplexity with context and highlighted text
+    const aiResponse = await generatePerplexityResponse(userMessage, conversationContext, highlightedText);
     console.log('AI response generated, length:', aiResponse.length);
     
     const nodeId = treeManager.addMessageToTree(
@@ -183,16 +183,16 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// Test Gemini API connection
-app.get('/api/test-gemini', async (req, res) => {
+// Test Perplexity API connection
+app.get('/api/test-perplexity', async (req, res) => {
   try {
-    const isConnected = await testGeminiConnection();
+    const isConnected = await testPerplexityConnection();
     res.json({
       connected: isConnected,
-      message: isConnected ? 'Gemini API connection successful' : 'Gemini API connection failed'
+      message: isConnected ? 'Perplexity API connection successful' : 'Perplexity API connection failed'
     });
   } catch (err) {
-    console.error('Error testing Gemini connection:', err);
+    console.error('Error testing Perplexity connection:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -230,8 +230,8 @@ app.post('/api/enhanced-learning/reprompt', async (req, res) => {
       }
     }
     
-    // Generate AI response using Gemini with previous response as context springboard
-    const aiResponse = await generateGeminiRepromptResponse(userMessage, previousContext || '');
+    // Generate AI response using Perplexity with previous response as context springboard
+    const aiResponse = await generatePerplexityRepromptResponse(userMessage, previousContext || '');
     console.log('Reprompt response generated, length:', aiResponse.length);
     
     res.json({
