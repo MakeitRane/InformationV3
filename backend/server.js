@@ -231,12 +231,13 @@ app.post('/api/enhanced-learning/reprompt', async (req, res) => {
     }
     
     // Generate AI response using Perplexity with previous response as context springboard
-    const aiResponse = await generatePerplexityRepromptResponse(userMessage, previousContext || '');
-    console.log('Reprompt response generated, length:', aiResponse.length);
+    const repromptResult = await generatePerplexityRepromptResponse(userMessage, previousContext || '');
+    console.log('Reprompt response generated, text length:', repromptResult.text.length, 'chunks:', repromptResult.chunks.length);
     
     res.json({
       message: 'Reprompt successful',
-      ai_response: aiResponse
+      ai_response: repromptResult.text,
+      chunks: repromptResult.chunks
     });
   } catch (err) {
     console.error('Error reprompting:', err);

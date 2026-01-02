@@ -53,8 +53,13 @@ function EnhancedLearningApp() {
   const [stickyQuestion, setStickyQuestion] = useState(null);
   const [chunkIndices, setChunkIndices] = useState({}); // Track current chunk index for each message
   const [responseContexts, setResponseContexts] = useState({}); // Store full context for each response
-  const [reprompts, setReprompts] = useState({}); // Track reprompts: { messageId: [{ chunkIndex, query, timestamp, originalQuery }] }
+  const [reprompts, setReprompts] = useState({}); // Track reprompts: { messageId: [{ chunkIndex, query, timestamp, responseStartChunk, responseEndChunk, chunks }] }
   const [userQueries, setUserQueries] = useState({}); // Track original user queries for each message
+  const [repromptBoundaries, setRepromptBoundaries] = useState({}); // Track reprompt boundaries: { messageId: minChunkIndex } - can't navigate back past this
+  const [repromptChunkIndices, setRepromptChunkIndices] = useState({}); // Track reprompt chunk indices: { messageId: { repromptIndex: currentChunkIndex } }
+  const [originalMessageContents, setOriginalMessageContents] = useState({}); // Store original message content before reprompts: { messageId: originalContent }
+  const [currentResponseChunks, setCurrentResponseChunks] = useState({}); // Store current response chunks: { messageId: chunks[] } - always the most recent response
+  const [previousVisibleChunks, setPreviousVisibleChunks] = useState({}); // Store previously visible chunks: { messageId: chunks[] } - chunks from previous response that remain visible
   const [showFollowUpBar, setShowFollowUpBar] = useState(false);
   const [showRepromptInput, setShowRepromptInput] = useState(false);
   const [repromptMessageId, setRepromptMessageId] = useState(null);
@@ -103,10 +108,11 @@ function EnhancedLearningApp() {
             const chunkElement = document.getElementById(`chunk-${messageId}-${chunkIndex}`);
             
             if (chunkElement) {
-              const containerRect = container.getBoundingClientRect();
               const chunkRect = chunkElement.getBoundingClientRect();
-              // Position relative to container top (for fixed positioning)
-              positions[`${messageId}-${index}`] = chunkRect.top - containerRect.top + container.scrollTop;
+              // Position relative to viewport top (for fixed positioning outside content area)
+              // The annotation container is position: fixed, so we need viewport coordinates
+              // chunkRect.top is already viewport-relative
+              positions[`${messageId}-${index}`] = chunkRect.top;
             } else {
               // If chunk not found, try to find the closest valid chunk
               // First try chunks near the target index
@@ -150,9 +156,11 @@ function EnhancedLearningApp() {
               }
               
               if (foundElement) {
-                const containerRect = container.getBoundingClientRect();
                 const chunkRect = foundElement.getBoundingClientRect();
-                positions[`${messageId}-${index}`] = chunkRect.top - containerRect.top + container.scrollTop;
+                // Position relative to viewport top (for fixed positioning outside content area)
+                // The annotation container is position: fixed, so we need viewport coordinates
+                // chunkRect.top is already viewport-relative
+                positions[`${messageId}-${index}`] = chunkRect.top;
               } else {
                 // Last resort: use estimated position based on chunk index
                 positions[`${messageId}-${index}`] = chunkIndex * 50;
@@ -248,11 +256,11 @@ function EnhancedLearningApp() {
         const lastMessage = currentConversation[currentConversation.length - 1];
         if (lastMessage && lastMessage.party === 'system') {
           const messageId = lastMessage._id;
-          const chunks = parseTextIntoChunks(lastMessage.content);
+          const currentChunks = currentResponseChunks[messageId] || [];
           const currentChunkIndex = chunkIndices[messageId] || 1;
           
-          // If at end of response, show follow up bar
-          if (currentChunkIndex >= chunks.length) {
+          // If at end of current response, show follow up bar
+          if (currentChunkIndex >= currentChunks.length) {
             setShowFollowUpBar(true);
             setShowRepromptInput(false);
           } else {
@@ -301,18 +309,18 @@ function EnhancedLearningApp() {
       const lastMessage = currentConversation[currentConversation.length - 1];
       if (lastMessage && lastMessage.party === 'system') {
         const messageId = lastMessage._id;
-        const chunks = parseTextIntoChunks(lastMessage.content);
+        const currentChunks = currentResponseChunks[messageId] || [];
         const currentChunkIndex = chunkIndices[messageId] || 1;
         
-        // If user has seen all chunks of the last response, show follow-up bar
-        if (currentChunkIndex >= chunks.length) {
+        // If user has seen all chunks of the current response, show follow-up bar
+        if (currentChunkIndex >= currentChunks.length) {
           setShowFollowUpBar(true);
         }
       }
     };
 
     checkEndOfResponse();
-  }, [currentConversation, chunkIndices]);
+  }, [currentConversation, chunkIndices, currentResponseChunks]);
 
   // Handle scroll for sticky header
   useEffect(() => {
@@ -384,6 +392,78 @@ function EnhancedLearningApp() {
     }
   };
 
+  // Build full content from previous visible chunks + current response chunks
+  // For navigation, we need to include ALL current response chunks (not just visible ones)
+  // so IncrementalResponse knows the total chunk count
+  const buildFullContentWithReprompts = (messageId, includeAllCurrentChunks = false) => {
+    let content = '';
+    
+    // Get previous visible chunks (from previous response, remain displayed)
+    const previousVisible = previousVisibleChunks[messageId] || [];
+    
+    // Get current response chunks
+    const currentChunks = currentResponseChunks[messageId] || [];
+    const currentChunkIndex = chunkIndices[messageId] || 1;
+    
+    // Determine which current chunks to include
+    // If includeAllCurrentChunks is true, include all chunks (for navigation total count)
+    // Otherwise, include only visible chunks (for display)
+    const chunksToInclude = includeAllCurrentChunks 
+      ? currentChunks 
+      : currentChunks.slice(0, currentChunkIndex);
+    
+    // Add previous visible chunks (they remain displayed)
+    previousVisible.forEach((chunk, index) => {
+      if (chunk.hasSubheader && chunk.subheader) {
+        if (index > 0) content += '\n\n';
+        content += chunk.subheader + '\n\n';
+      } else if (index > 0 && previousVisible[index - 1]?.subheader !== chunk.subheader) {
+        if (chunk.subheader) {
+          content += '\n\n' + chunk.subheader + '\n\n';
+        }
+      }
+      content += chunk.fullText;
+      if (index < previousVisible.length - 1) {
+        content += ' ';
+      }
+    });
+    
+    // Add current response chunks
+    if (chunksToInclude.length > 0) {
+      // Check if new section starts
+      const startsNewSection = previousVisible.length > 0 
+        ? doesNewResponseStartNewSection(previousVisible, chunksToInclude[0]?.fullText || '')
+        : false;
+      
+      if (startsNewSection && content.trim()) {
+        content += '\n\n';
+      } else if (content.trim()) {
+        content += ' ';
+      }
+      
+      chunksToInclude.forEach((chunk, chunkIdx) => {
+        if (chunk.hasSubheader && chunk.subheader) {
+          if (chunkIdx > 0 || content.trim()) {
+            if (chunkIdx === 0 && !content.endsWith('\n\n')) {
+              content += '\n\n';
+            }
+          }
+          content += chunk.subheader + '\n\n';
+        } else if (chunkIdx > 0 && chunksToInclude[chunkIdx - 1]?.subheader !== chunk.subheader) {
+          if (chunk.subheader) {
+            content += '\n\n' + chunk.subheader + '\n\n';
+          }
+        }
+        content += chunk.fullText;
+        if (chunkIdx < chunksToInclude.length - 1) {
+          content += ' ';
+        }
+      });
+    }
+    
+    return content.trim();
+  };
+
   const handleChunkNavigate = (messageId, chunkIndex, direction) => {
     if (direction === 'previous') {
       // Navigate to previous response
@@ -402,11 +482,52 @@ function EnhancedLearningApp() {
         }
       }
     } else {
-      // Update chunk index for this message
+      // Navigation: chunkIndex is total visible chunks (previous visible + current visible)
+      // We need to extract the current response chunk index
+      const previousVisible = previousVisibleChunks[messageId] || [];
+      const previousCount = previousVisible.length;
+      
+      // Calculate current response chunk index
+      // chunkIndex is total visible, so subtract previous count to get current index
+      const currentResponseChunkIndex = Math.max(1, chunkIndex - previousCount);
+      
+      const currentChunks = currentResponseChunks[messageId] || [];
+      const totalCurrentChunks = currentChunks.length;
+      
+      console.log(`[handleChunkNavigate] messageId: ${messageId}`);
+      console.log(`[handleChunkNavigate] chunkIndex (total): ${chunkIndex}`);
+      console.log(`[handleChunkNavigate] previousCount: ${previousCount}`);
+      console.log(`[handleChunkNavigate] currentResponseChunkIndex: ${currentResponseChunkIndex}`);
+      console.log(`[handleChunkNavigate] currentChunks.length: ${totalCurrentChunks}`);
+      console.log(`[handleChunkNavigate] currentChunks:`, currentChunks.map(c => c.fullText.substring(0, 50)));
+      
+      // Ensure chunk index is within valid bounds for current response
+      const validChunkIndex = Math.max(1, Math.min(currentResponseChunkIndex, totalCurrentChunks));
+      
+      console.log(`[handleChunkNavigate] Setting chunkIndices[${messageId}] to ${validChunkIndex}`);
+      
       setChunkIndices(prev => ({
         ...prev,
-        [messageId]: chunkIndex
+        [messageId]: validChunkIndex
       }));
+      
+      // Rebuild content after navigation (only visible chunks)
+      const updatedContent = buildFullContentWithReprompts(messageId, false);
+      
+      const messageIndex = currentConversation.findIndex(msg => msg._id === messageId);
+      if (messageIndex !== -1) {
+        const updatedConversation = [...currentConversation];
+        updatedConversation[messageIndex] = {
+          ...updatedConversation[messageIndex],
+          content: updatedContent
+        };
+        setCurrentConversation(updatedConversation);
+        
+        setResponseContexts(prev => ({
+          ...prev,
+          [messageId]: updatedContent
+        }));
+      }
     }
   };
 
@@ -582,115 +703,144 @@ function EnhancedLearningApp() {
       // Store the FULL original content before any truncation
       const fullOriginalContent = originalMessage.content;
       
-      console.log('Reprompting:', { messageId, newQuery, contextLength: context.length, repromptLocation, currentChunkIndex });
-      
-      // Parse original content into chunks to find where to truncate
+      // Parse original content into chunks
       const originalChunks = parseTextIntoChunks(fullOriginalContent);
       
-      // FIX 2: Always truncate at the END of visible content (currentChunkIndex - 1)
-      // This ensures the reprompt response always starts fresh after the previous content ends
-      const truncateAtChunk = currentChunkIndex - 1; // Last visible chunk index
+      // Validate and normalize currentChunkIndex
+      // currentChunkIndex is 1-indexed (1 = first chunk, 2 = second chunk, etc.)
+      // But arrays are 0-indexed, so we need to handle this correctly
+      let normalizedChunkIndex = currentChunkIndex || 1;
       
-      // Truncate at the end of visible content (include everything up to and including the last visible chunk)
-      let truncatedContent = '';
-      for (let i = 0; i <= truncateAtChunk && i < originalChunks.length; i++) {
-        const chunk = originalChunks[i];
-        // Add subheader if this is the first chunk of a new section
-        if (chunk.hasSubheader && chunk.subheader) {
-          if (i > 0) truncatedContent += '\n\n';
-          truncatedContent += chunk.subheader + '\n\n';
-        } else if (i > 0 && originalChunks[i - 1]?.subheader !== chunk.subheader) {
-          // Subheader changed, add it
-          if (chunk.subheader) {
-            truncatedContent += '\n\n' + chunk.subheader + '\n\n';
-          }
-        }
-        truncatedContent += chunk.fullText;
-        if (i < truncateAtChunk) {
-          truncatedContent += ' ';
-        }
+      // Ensure chunk index is within valid range
+      if (normalizedChunkIndex < 1) {
+        normalizedChunkIndex = 1;
+      } else if (normalizedChunkIndex > originalChunks.length) {
+        // If user has read past all chunks, use the last chunk
+        normalizedChunkIndex = originalChunks.length;
       }
       
-      // Call reprompt endpoint with context as springboard and original content for storage
+      console.log('Reprompting:', { 
+        messageId, 
+        newQuery, 
+        originalChunkIndex: currentChunkIndex,
+        normalizedChunkIndex,
+        totalChunks: originalChunks.length
+      });
+      
+      // Get visible chunks (up to normalizedChunkIndex)
+      // slice(0, normalizedChunkIndex) gives chunks at indices 0 to normalizedChunkIndex-1
+      // This means if normalizedChunkIndex is 4, we get chunks 0, 1, 2, 3 (first 4 chunks)
+      const visibleChunks = originalChunks.slice(0, normalizedChunkIndex);
+      
+      // Build proper context with all previous reprompts and responses
+      // Use normalizedChunkIndex to ensure we're using the correct chunk count
+      const repromptContext = buildRepromptContext(messageId, normalizedChunkIndex);
+      
+      // Call reprompt endpoint with proper context
       const response = await axios.post(`${API_URL}/enhanced-learning/reprompt`, {
         userMessage: newQuery,
-        previousContext: context,
+        previousContext: repromptContext,
         messageId: messageId,
-        originalContent: fullOriginalContent  // Send full original content to backend for storage
+        originalContent: fullOriginalContent
       });
 
       console.log('Reprompt response received:', response.data);
 
-      // Append the new reprompt response to the truncated content
-      const updatedContent = truncatedContent.trim() + '\n\n' + response.data.ai_response;
+      // Get chunks from backend response
+      const repromptChunks = response.data.chunks || [];
       
-      // Update the original message with new content (truncated + new response)
+      if (!repromptChunks || repromptChunks.length === 0) {
+        throw new Error('No chunks received from reprompt response');
+      }
+
+      console.log('Reprompt chunks received:', repromptChunks.length);
+
+      // Get current visible chunks from current response (before reprompt)
+      const currentChunks = currentResponseChunks[messageId] || [];
+      const currentVisibleChunks = currentChunks.slice(0, normalizedChunkIndex);
+      
+      // Get existing previous visible chunks (from previous reprompts)
+      const existingPreviousVisible = previousVisibleChunks[messageId] || [];
+      
+      // Append newly displayed chunks to previous visible chunks
+      // This handles multiple reprompts correctly
+      const updatedPreviousVisible = [...existingPreviousVisible, ...currentVisibleChunks];
+      
+      console.log(`[handleReprompt] Saving ${currentVisibleChunks.length} visible chunks to previousVisibleChunks`);
+      console.log(`[handleReprompt] Total previous visible chunks: ${updatedPreviousVisible.length}`);
+      
+      // Store updated previous visible chunks (they remain displayed)
+      setPreviousVisibleChunks(prev => ({
+        ...prev,
+        [messageId]: updatedPreviousVisible
+      }));
+      
+      // Completely replace current response chunks with new reprompt chunks
+      console.log(`[handleReprompt] Replacing currentResponseChunks with ${repromptChunks.length} new chunks`);
+      setCurrentResponseChunks(prev => ({
+        ...prev,
+        [messageId]: repromptChunks
+      }));
+      
+      // Reset chunk index to 1 (first chunk of new response appears immediately)
+      setChunkIndices(prev => ({
+        ...prev,
+        [messageId]: 1
+      }));
+      
+      // Build content: previous visible chunks + first chunk of new reprompt response
+      let updatedContent = '';
+      
+      // Add previous visible chunks (they remain displayed)
+      updatedPreviousVisible.forEach((chunk, index) => {
+        if (chunk.hasSubheader && chunk.subheader) {
+          if (index > 0) updatedContent += '\n\n';
+          updatedContent += chunk.subheader + '\n\n';
+        } else if (index > 0 && updatedPreviousVisible[index - 1]?.subheader !== chunk.subheader) {
+          if (chunk.subheader) {
+            updatedContent += '\n\n' + chunk.subheader + '\n\n';
+          }
+        }
+        updatedContent += chunk.fullText;
+        if (index < updatedPreviousVisible.length - 1) {
+          updatedContent += ' ';
+        }
+      });
+
+      // Add first chunk of reprompt response (appears immediately)
+      if (repromptChunks.length > 0) {
+        // Check if new section starts
+        const startsNewSection = doesNewResponseStartNewSection(updatedPreviousVisible, repromptChunks[0]?.fullText || '');
+        
+        if (startsNewSection && updatedContent.trim()) {
+          updatedContent += '\n\n';
+        } else if (updatedContent.trim()) {
+          updatedContent += ' ';
+        }
+        
+        const firstChunk = repromptChunks[0];
+        if (firstChunk.hasSubheader && firstChunk.subheader) {
+          updatedContent += firstChunk.subheader + '\n\n';
+        }
+        updatedContent += firstChunk.fullText;
+      }
+      
+      // Update the message with new content (previous visible chunks + first reprompt chunk)
       const updatedMessage = {
         ...originalMessage,
-        content: updatedContent
+        content: updatedContent.trim()
       };
       
       // Update context
       setResponseContexts(prev => ({
         ...prev,
-        [messageId]: updatedContent
+        [messageId]: updatedContent.trim()
       }));
 
-      // Update conversation - replace the message with updated content
+      // Update conversation
       const updatedConversation = [...currentConversation];
       updatedConversation[messageIndex] = updatedMessage;
-      
       setCurrentConversation(updatedConversation);
-      
-      // SOLUTION 2: Recalculate all previous reprompt chunk indices synchronously
-      // This ensures that when content changes, all existing reprompts are remapped to correct chunks
-      const existingReprompts = reprompts[messageId] || [];
-      let recalculatedReprompts = [];
-      
-      if (existingReprompts.length > 0) {
-        // Recalculate indices for all existing reprompts synchronously
-        recalculatedReprompts = existingReprompts.map(reprompt => ({
-          ...reprompt,
-          chunkIndex: recalculateChunkIndex(fullOriginalContent, updatedContent, reprompt.chunkIndex)
-        }));
-      }
-      
-      // Parse the updated content to find the correct chunk index where the reprompt happened
-      // The reprompt happened at the end of the truncated content (truncateAtChunk)
-      // After re-parsing, we need to find which chunk in the updated content corresponds to that position
-      const updatedChunks = parseTextIntoChunks(updatedContent);
-      
-      // Calculate the new reprompt chunk index using the recalculation function
-      // This ensures consistency with how we recalculate previous reprompts
-      let repromptChunkIndex = recalculateChunkIndex(fullOriginalContent, updatedContent, truncateAtChunk);
-      
-      // Ensure we don't exceed the number of chunks
-      if (repromptChunkIndex >= updatedChunks.length) {
-        repromptChunkIndex = Math.max(0, updatedChunks.length - 1);
-      }
-      
-      // Update reprompts state with both recalculated and new reprompt
-      // Use setTimeout to ensure state updates happen after DOM updates
-      setTimeout(() => {
-        setReprompts(prev => ({
-          ...prev,
-          [messageId]: [
-            ...recalculatedReprompts,
-            {
-              chunkIndex: repromptChunkIndex,
-              query: newQuery,
-              timestamp: Date.now()
-            }
-          ]
-        }));
-      }, 200); // Delay to ensure DOM is updated
-      
-      // Keep the current chunk index (where reprompt happened) so we continue from there
-      // The previous content (chunks 0 to repromptLocation) remains visible
-      // New content will be appended and parsed as new chunks starting from repromptLocation + 1
-      // By preserving currentChunkIndex, we show all content up to where the reprompt happened,
-      // and new chunks will appear as the user navigates forward
-      // Don't reset to 1 - preserve the current position to maintain continuity
 
       // Auto-scroll to the updated message after a short delay
       setTimeout(() => {
@@ -741,16 +891,36 @@ function EnhancedLearningApp() {
         const contexts = {};
         const indices = {};
         const queries = {};
+        const responseChunks = {};
         messagesWithTreeId.forEach(msg => {
           if (msg.party === 'system') {
             contexts[msg._id] = msg.content;
             indices[msg._id] = 1; // Start at first chunk
             queries[msg._id] = query; // Store original query
+            // Parse and store chunks from initial response
+            const chunks = parseTextIntoChunks(msg.content);
+            responseChunks[msg._id] = chunks;
+            // Store original content
+            setOriginalMessageContents(prev => ({
+              ...prev,
+              [msg._id]: msg.content
+            }));
           }
         });
         setResponseContexts(contexts);
         setChunkIndices(indices);
         setUserQueries(queries);
+        setCurrentResponseChunks(responseChunks);
+        // Initialize previousVisibleChunks as empty for new messages
+        setPreviousVisibleChunks(prev => {
+          const updated = { ...prev };
+          messagesWithTreeId.forEach(msg => {
+            if (msg.party === 'system' && !updated[msg._id]) {
+              updated[msg._id] = [];
+            }
+          });
+          return updated;
+        });
         
         // Auto-scroll to the new response after a short delay
         setTimeout(() => {
@@ -805,16 +975,38 @@ function EnhancedLearningApp() {
         const contexts = { ...responseContexts };
         const indices = { ...chunkIndices };
         const queries = { ...userQueries };
+        const responseChunks = { ...currentResponseChunks };
+        const originalContents = {};
         messagesWithTreeId.forEach(msg => {
           if (msg.party === 'system' && !contexts[msg._id]) {
             contexts[msg._id] = msg.content;
             indices[msg._id] = 1; // Start at first chunk
             queries[msg._id] = query; // Store original query
+            // Parse and store chunks from initial response
+            const chunks = parseTextIntoChunks(msg.content);
+            responseChunks[msg._id] = chunks;
+            // Store original content
+            originalContents[msg._id] = msg.content;
           }
         });
         setResponseContexts(contexts);
         setChunkIndices(indices);
         setUserQueries(queries);
+        setCurrentResponseChunks(responseChunks);
+        setOriginalMessageContents(prev => ({
+          ...prev,
+          ...originalContents
+        }));
+        // Initialize previousVisibleChunks as empty for new messages
+        setPreviousVisibleChunks(prev => {
+          const updated = { ...prev };
+          messagesWithTreeId.forEach(msg => {
+            if (msg.party === 'system' && !updated[msg._id]) {
+              updated[msg._id] = [];
+            }
+          });
+          return updated;
+        });
         
         // Auto-scroll to the new response after a short delay
         setTimeout(() => {
@@ -835,19 +1027,143 @@ function EnhancedLearningApp() {
     }
   };
 
-  // Get previous context for a message (all previous responses)
+  // Get previous context for a message (all previous responses and reprompts)
   const getPreviousContext = (messageId) => {
     const messageIndex = currentConversation.findIndex(msg => msg._id === messageId);
     if (messageIndex === -1) return '';
 
-    // Get all previous AI responses
+    // Get all previous AI responses (from other messages)
     const previousResponses = currentConversation
       .slice(0, messageIndex)
       .filter(msg => msg.party === 'system')
-      .map(msg => responseContexts[msg._id] || msg.content)
-      .join('\n\n');
+      .map((msg, idx) => {
+        const userMsg = currentConversation[idx];
+        const userQuery = userQueries[msg._id] || (userMsg && userMsg.party === 'user' ? userMsg.content : '');
+        return `User: ${userQuery}\n\nAI Response: ${responseContexts[msg._id] || msg.content}`;
+      })
+      .join('\n\n---\n\n');
 
     return previousResponses;
+  };
+
+  // Build context for reprompt including all previous reprompts and responses
+  const buildRepromptContext = (messageId, visibleChunkIndex) => {
+    const message = currentConversation.find(msg => msg._id === messageId);
+    if (!message) return '';
+
+    const chunks = parseTextIntoChunks(message.content);
+    
+    // Validate and normalize visibleChunkIndex
+    // visibleChunkIndex is 1-indexed (1 = first chunk, 2 = second chunk, etc.)
+    let normalizedIndex = visibleChunkIndex || 1;
+    if (normalizedIndex < 1) {
+      normalizedIndex = 1;
+    } else if (normalizedIndex > chunks.length) {
+      normalizedIndex = chunks.length;
+    }
+    
+    // Get visible chunks (slice(0, normalizedIndex) gives chunks 0 to normalizedIndex-1)
+    const visibleChunks = chunks.slice(0, normalizedIndex);
+    
+    // Get previous conversation history (from other messages)
+    const previousHistory = getPreviousContext(messageId);
+    
+    // Build visible chunks text
+    let visibleChunksText = '';
+    visibleChunks.forEach((chunk, index) => {
+      if (chunk.hasSubheader && chunk.subheader) {
+        if (index > 0) visibleChunksText += '\n\n';
+        visibleChunksText += chunk.subheader + '\n\n';
+      } else if (index > 0 && visibleChunks[index - 1]?.subheader !== chunk.subheader) {
+        if (chunk.subheader) {
+          visibleChunksText += '\n\n' + chunk.subheader + '\n\n';
+        }
+      }
+      visibleChunksText += chunk.fullText;
+      if (index < visibleChunks.length - 1) {
+        visibleChunksText += ' ';
+      }
+    });
+
+    // Get all previous reprompts for this message with their responses
+    // Only include reprompts that have been completed (have response chunks)
+    const messageReprompts = reprompts[messageId] || [];
+    let repromptHistory = '';
+    
+    if (messageReprompts.length > 0) {
+      // Sort reprompts by chunkIndex to get chronological order
+      // Filter to only include completed reprompts (those with response chunks)
+      const completedReprompts = messageReprompts
+        .filter(r => r.responseStartChunk !== undefined && r.responseEndChunk !== undefined)
+        .sort((a, b) => a.chunkIndex - b.chunkIndex);
+      
+      completedReprompts.forEach((reprompt, idx) => {
+        // Get the response for this reprompt (chunks from responseStartChunk to responseEndChunk)
+        const responseChunks = chunks.slice(reprompt.responseStartChunk, reprompt.responseEndChunk + 1);
+        let responseText = '';
+        responseChunks.forEach((chunk, chunkIdx) => {
+          if (chunk.hasSubheader && chunk.subheader) {
+            if (chunkIdx > 0) responseText += '\n\n';
+            responseText += chunk.subheader + '\n\n';
+          } else if (chunkIdx > 0 && responseChunks[chunkIdx - 1]?.subheader !== chunk.subheader) {
+            if (chunk.subheader) {
+              responseText += '\n\n' + chunk.subheader + '\n\n';
+            }
+          }
+          responseText += chunk.fullText;
+          if (chunkIdx < responseChunks.length - 1) {
+            responseText += ' ';
+          }
+        });
+        
+        repromptHistory += `\n\n--- Reprompt ${idx + 1} ---\n`;
+        repromptHistory += `User Reprompt: ${reprompt.query}\n\n`;
+        repromptHistory += `AI Response: ${responseText}`;
+      });
+    }
+
+    // Combine everything
+    let fullContext = '';
+    if (previousHistory) {
+      fullContext += `Previous Conversation History:\n${previousHistory}\n\n`;
+    }
+    if (visibleChunksText) {
+      fullContext += `Previous Response Context (up to current reading point):\n${visibleChunksText}`;
+    }
+    if (repromptHistory) {
+      fullContext += `\n\nPrevious Reprompts and Responses:${repromptHistory}`;
+    }
+
+    return fullContext;
+  };
+
+  // Check if new response starts a new section
+  const doesNewResponseStartNewSection = (visibleChunks, newResponseText) => {
+    if (visibleChunks.length === 0) return false;
+    
+    // Get last subheader from visible chunks
+    let lastSubheader = null;
+    for (let i = visibleChunks.length - 1; i >= 0; i--) {
+      if (visibleChunks[i].subheader) {
+        lastSubheader = visibleChunks[i].subheader.trim();
+        break;
+      }
+    }
+    
+    // Parse new response to get first subheader
+    const newChunks = parseTextIntoChunks(newResponseText);
+    const firstNewSubheader = newChunks.length > 0 && newChunks[0].subheader 
+      ? newChunks[0].subheader.trim() 
+      : null;
+    
+    // If no subheaders, it's a continuation
+    if (!lastSubheader && !firstNewSubheader) return false;
+    if (!lastSubheader && firstNewSubheader) return true; // New section
+    if (lastSubheader && !firstNewSubheader) return false; // Continuation
+    
+    // Compare subheaders - if significantly different, it's a new section
+    // Simple comparison: if they're not the same, it's a new section
+    return lastSubheader.toLowerCase() !== firstNewSubheader.toLowerCase();
   };
 
   return (
@@ -1000,14 +1316,26 @@ function EnhancedLearningApp() {
                         <div className="space-y-6" style={{ width: '100%' }}>
                           <div className="prose prose-invert max-w-none relative" style={{ width: '100%', maxWidth: 'none' }}>
                             <IncrementalResponse
-                              fullText={message.content}
+                              fullText={(() => {
+                                // Rebuild content with ALL current response chunks (for navigation total count)
+                                // IncrementalResponse will use currentChunkIndex to show only visible chunks
+                                return buildFullContentWithReprompts(message._id, true);
+                              })()}
                               messageId={message._id}
                               onReprompt={handleReprompt}
                               onNavigate={handleChunkNavigate}
-                              currentChunkIndex={chunkIndices[message._id] || 1}
+                              currentChunkIndex={(() => {
+                                // Total visible chunks = previous visible + current visible
+                                const previousVisible = previousVisibleChunks[message._id] || [];
+                                const currentIndex = chunkIndices[message._id] || 1;
+                                return previousVisible.length + currentIndex;
+                              })()}
                               previousContext={getPreviousContext(message._id)}
                               reprompts={reprompts[message._id] || []}
                               isRepromptResponse={message.isRepromptResponse || false}
+                              repromptBoundary={repromptBoundaries[message._id] || null}
+                              originalChunkIndex={chunkIndices[message._id] || 1}
+                              repromptChunkIndices={repromptChunkIndices[message._id] || {}}
                               onShowRepromptInput={(msgId) => {
                                 setShowRepromptInput(true);
                                 setRepromptMessageId(msgId);
@@ -1019,9 +1347,9 @@ function EnhancedLearningApp() {
                                 // Show follow up bar if at end of response
                                 const lastMsg = currentConversation[currentConversation.length - 1];
                                 if (lastMsg && lastMsg.party === 'system' && lastMsg._id === message._id) {
-                                  const chunks = parseTextIntoChunks(lastMsg.content);
+                                  const currentChunks = currentResponseChunks[lastMsg._id] || [];
                                   const currentChunkIndex = chunkIndices[lastMsg._id] || 1;
-                                  if (currentChunkIndex >= chunks.length) {
+                                  if (currentChunkIndex >= currentChunks.length) {
                                     setShowFollowUpBar(true);
                                   }
                                 }
@@ -1081,6 +1409,7 @@ function EnhancedLearningApp() {
             if (message.party === 'system' && reprompts[message._id] && reprompts[message._id].length > 0) {
               return reprompts[message._id].map((reprompt, repromptIndex) => {
                 const positionKey = `${message._id}-${repromptIndex}`;
+                // Get position from calculated positions (relative to container scroll)
                 const topPosition = repromptPositions[positionKey] !== undefined 
                   ? repromptPositions[positionKey] 
                   : reprompt.chunkIndex * 50; // Fallback estimate
@@ -1093,7 +1422,8 @@ function EnhancedLearningApp() {
                       right: '8px', // Padding from right edge
                       top: `${topPosition}px`,
                       width: '180px',
-                      pointerEvents: 'auto'
+                      pointerEvents: 'auto',
+                      transform: 'translateY(0)' // Ensure proper positioning
                     }}
                   >
                     <div className="flex items-start gap-2">
@@ -1150,17 +1480,24 @@ function EnhancedLearningApp() {
                 if (repromptText.trim()) {
                   const message = currentConversation.find(msg => msg._id === repromptMessageId);
                   if (message) {
-                    const chunks = parseTextIntoChunks(message.content);
-                    const currentChunkIndex = chunkIndices[repromptMessageId] || 1;
-                    const visibleChunkTexts = chunks.slice(0, currentChunkIndex).map(chunk => chunk.fullText).join(' ');
-                    const fullContext = getPreviousContext(repromptMessageId) 
-                      ? `${getPreviousContext(repromptMessageId)}\n\n${visibleChunkTexts}`
-                      : visibleChunkTexts;
+                    // Get current chunk index - works at any chunk number (1, 2, 3, ... n)
+                    // currentChunkIndex is 1-indexed (1 = first chunk)
+                    let currentChunkIndex = chunkIndices[repromptMessageId] || 1;
+                    
+                    // Validate chunk index is valid
+                    const currentChunks = currentResponseChunks[repromptMessageId] || [];
+                    if (currentChunkIndex < 1) {
+                      currentChunkIndex = 1;
+                    } else if (currentChunkIndex > currentChunks.length && currentChunks.length > 0) {
+                      currentChunkIndex = currentChunks.length;
+                    }
+                    
+                    const repromptContext = buildRepromptContext(repromptMessageId, currentChunkIndex);
                     
                     await handleReprompt({
                       messageId: repromptMessageId,
                       newQuery: repromptText.trim(),
-                      context: fullContext,
+                      context: repromptContext,
                       currentChunkIndex: currentChunkIndex,
                       repromptLocation: currentChunkIndex - 1
                     });
@@ -1181,6 +1518,20 @@ function EnhancedLearningApp() {
                     e.target.style.height = 'auto';
                     const newHeight = Math.min(e.target.scrollHeight, 144); // 6 lines max (24px per line)
                     e.target.style.height = newHeight + 'px';
+                  }}
+                  onKeyDown={(e) => {
+                    // Submit on Enter (without Shift)
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      // Only submit if there's text and not loading
+                      if (repromptText.trim() && !loading) {
+                        const form = e.target.closest('form');
+                        if (form) {
+                          form.requestSubmit();
+                        }
+                      }
+                    }
+                    // Shift+Enter allows new line (default behavior, no preventDefault)
                   }}
                   className="w-full bg-transparent text-[#e8e9e2] p-4 pl-12 pr-16 focus:outline-none min-h-[60px] max-h-[144px] resize-none flex items-center overflow-y-auto"
                   placeholder="Type your updated query or direction..."

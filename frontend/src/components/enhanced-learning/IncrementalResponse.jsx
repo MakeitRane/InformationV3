@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { parseTextIntoChunks } from '../../utils/chunkParser';
 
 const IncrementalResponse = ({ 
@@ -8,11 +8,14 @@ const IncrementalResponse = ({
   onNavigate,
   currentChunkIndex,
   previousContext = '',
-  reprompts = [], // Array of { chunkIndex, query, timestamp }
+  reprompts = [], // Array of { chunkIndex, query, timestamp, chunks, repromptIndex }
   isRepromptResponse = false, // Whether this is a response from a reprompt
   header = null, // Optional header for the response
   onShowRepromptInput = null, // Callback to show reprompt input in parent
-  onHideRepromptInput = null // Callback to hide reprompt input in parent
+  onHideRepromptInput = null, // Callback to hide reprompt input in parent
+  repromptBoundary = null, // Minimum chunk index - can't navigate back past this
+  originalChunkIndex = 1, // Original chunk index (for original response chunks)
+  repromptChunkIndices = {} // Reprompt chunk indices: { repromptIndex: currentChunkIndex }
 }) => {
   const [chunks, setChunks] = useState([]);
   const [visibleChunks, setVisibleChunks] = useState(1);
@@ -21,22 +24,33 @@ const IncrementalResponse = ({
   const [annotationPositions, setAnnotationPositions] = useState({});
   const lastChunkRef = useRef(null);
 
-  // Parse text into chunks on initial load
+  // Parse text into chunks on initial load or when content changes
+  // fullText is already built with original + reprompt chunks by parent
   useEffect(() => {
     if (fullText) {
       const parsedChunks = parseTextIntoChunks(fullText);
+      
+      // Validate and normalize currentChunkIndex
+      // currentChunkIndex is 1-indexed (1 = first chunk, 2 = second chunk, etc.)
+      let normalizedIndex = currentChunkIndex || 1;
+      if (normalizedIndex < 1) {
+        normalizedIndex = 1;
+      } else if (normalizedIndex > parsedChunks.length && parsedChunks.length > 0) {
+        // If index exceeds total chunks, show all chunks
+        normalizedIndex = parsedChunks.length;
+      }
+      
       // Debug: log chunks to verify subheader extraction
-      console.log('Parsed chunks with subheaders:', parsedChunks.map((c, i) => ({
-        index: i,
-        subheader: c.subheader,
-        hasSubheader: c.hasSubheader,
-        textPreview: c.fullText.substring(0, 50)
-      })));
+      console.log(`[IncrementalResponse ${messageId}] Parsed ${parsedChunks.length} chunks, currentChunkIndex: ${currentChunkIndex}, normalized: ${normalizedIndex}`);
       setChunks(parsedChunks);
-      // Use currentChunkIndex if provided, otherwise start with first chunk
-      setVisibleChunks(currentChunkIndex || 1);
+      
+      // Set visible chunks count
+      // normalizedIndex represents how many chunks should be visible (1-indexed)
+      // So if normalizedIndex is 4, we show chunks 0, 1, 2, 3 (first 4 chunks)
+      setVisibleChunks(normalizedIndex);
+      console.log(`[IncrementalResponse ${messageId}] Set visible chunks to: ${normalizedIndex} out of ${parsedChunks.length} total`);
     }
-  }, [fullText, currentChunkIndex]);
+  }, [fullText, currentChunkIndex, messageId]);
 
   // Calculate displayed chunks - memoized to avoid recalculation
   const displayedChunks = useMemo(() => {
@@ -92,6 +106,20 @@ const IncrementalResponse = ({
     }
   }, [visibleChunks]);
 
+  // Handle navigation forward
+  const handleReadOn = useCallback(() => {
+    // Use currentChunkIndex from parent (source of truth) instead of local visibleChunks
+    const currentIndex = currentChunkIndex || 1;
+    if (chunks.length > 0 && currentIndex < chunks.length) {
+      const newIndex = currentIndex + 1;
+      if (onNavigate) {
+        // Calculate which chunk we're navigating to
+        // newIndex is the total visible chunk count (original + reprompt chunks)
+        onNavigate(messageId, newIndex);
+      }
+    }
+  }, [currentChunkIndex, chunks.length, onNavigate, messageId]);
+
   // Handle keyboard events for navigation and typing detection
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -106,11 +134,7 @@ const IncrementalResponse = ({
         handleReadOn();
       }
       
-      // Arrow up - go back (previous chunk)
-      if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        handleGoBack();
-      }
+      // Arrow up - disabled (no backward navigation)
 
       // Typing detection - show reprompt input
       // Only trigger if it's a printable character (not special keys)
@@ -129,28 +153,23 @@ const IncrementalResponse = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [visibleChunks, chunks.length, onShowRepromptInput, messageId]);
-
-  const handleReadOn = () => {
-    if (visibleChunks < chunks.length) {
-      const newIndex = visibleChunks + 1;
-      setVisibleChunks(newIndex);
-      if (onNavigate) {
-        onNavigate(messageId, newIndex);
-      }
-    }
-  };
+  }, [handleReadOn, onShowRepromptInput, messageId]);
 
   const handleGoBack = () => {
-    if (visibleChunks > 1) {
+    // Check if we're at or below the reprompt boundary
+    const minChunkIndex = repromptBoundary !== null ? repromptBoundary : 1;
+    
+    if (visibleChunks > minChunkIndex) {
       const newIndex = visibleChunks - 1;
       setVisibleChunks(newIndex);
       if (onNavigate) {
         onNavigate(messageId, newIndex);
       }
-    } else if (onNavigate) {
-      // If at first chunk, navigate to previous response
-      onNavigate(messageId, 0, 'previous');
+    } else if (visibleChunks === minChunkIndex && onNavigate) {
+      // At boundary - can't go back further, but can navigate to previous response if at first chunk
+      if (minChunkIndex === 1) {
+        onNavigate(messageId, 0, 'previous');
+      }
     }
   };
 

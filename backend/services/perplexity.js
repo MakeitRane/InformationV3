@@ -130,6 +130,45 @@ function convertJsonToText(jsonResponse) {
 }
 
 /**
+ * Convert JSON schema response to chunk structure (for reprompt responses)
+ * @param {Object} jsonResponse - The JSON response from Perplexity
+ * @returns {Array} Array of chunk objects with { subheader, fullText, hasSubheader }
+ */
+function convertJsonToChunks(jsonResponse) {
+  if (!jsonResponse || !jsonResponse.sections || !Array.isArray(jsonResponse.sections)) {
+    return [];
+  }
+
+  const chunks = [];
+  let currentSubheader = null;
+
+  jsonResponse.sections.forEach((section, sectionIndex) => {
+    const sectionSubheader = section.subheader ? section.subheader.trim() : null;
+    
+    if (section.chunks && Array.isArray(section.chunks)) {
+      section.chunks.forEach((chunkText, chunkIndex) => {
+        if (chunkText && chunkText.trim()) {
+          // Determine if this chunk should have a subheader
+          const hasSubheader = sectionSubheader && 
+                               (sectionSubheader !== currentSubheader || chunkIndex === 0);
+          
+          chunks.push({
+            subheader: sectionSubheader,
+            fullText: chunkText.trim(),
+            hasSubheader: hasSubheader,
+            sentences: [] // Not needed for reprompt chunks
+          });
+          
+          currentSubheader = sectionSubheader;
+        }
+      });
+    }
+  });
+
+  return chunks;
+}
+
+/**
  * Generate AI response using Perplexity API
  * @param {string} userMessage - The user's message
  * @param {Array} conversationContext - Previous conversation context
@@ -180,6 +219,15 @@ export async function generatePerplexityResponse(userMessage, conversationContex
       max_tokens: 4000
     };
 
+    // Log API call to terminal
+    console.log('\n' + '='.repeat(80));
+    console.log('PERPLEXITY API CALL - generatePerplexityResponse');
+    console.log('='.repeat(80));
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('\n--- PROMPT ---');
+    console.log(JSON.stringify(requestBody, null, 2));
+    console.log('--- END PROMPT ---\n');
+
     // Make API call to Perplexity
     const response = await axios.post(
       PERPLEXITY_API_URL,
@@ -191,6 +239,12 @@ export async function generatePerplexityResponse(userMessage, conversationContex
         }
       }
     );
+
+    // Log API response to terminal
+    console.log('--- RESPONSE ---');
+    console.log(JSON.stringify(response.data, null, 2));
+    console.log('--- END RESPONSE ---');
+    console.log('='.repeat(80) + '\n');
 
     // Extract the response content
     const responseContent = response.data.choices[0]?.message?.content;
@@ -208,6 +262,10 @@ export async function generatePerplexityResponse(userMessage, conversationContex
       console.error('Error parsing JSON response:', parseError);
       console.error('Response content:', responseContent);
       // Fallback: try to extract text if JSON parsing fails
+      console.log('--- AI GENERATED TEXT RESPONSE (FALLBACK) ---');
+      console.log(responseContent);
+      console.log('--- END AI GENERATED TEXT RESPONSE ---');
+      console.log('='.repeat(80) + '\n');
       return responseContent;
     }
 
@@ -217,6 +275,12 @@ export async function generatePerplexityResponse(userMessage, conversationContex
     if (!textResponse || textResponse.trim().length === 0) {
       throw new Error('Empty response from Perplexity API after conversion');
     }
+
+    // Log the final AI-generated text response
+    console.log('--- AI GENERATED TEXT RESPONSE ---');
+    console.log(textResponse.trim());
+    console.log('--- END AI GENERATED TEXT RESPONSE ---');
+    console.log('='.repeat(80) + '\n');
 
     return textResponse.trim();
   } catch (error) {
@@ -240,7 +304,7 @@ export async function generatePerplexityResponse(userMessage, conversationContex
  * Generate AI response for reprompting - uses previous response as context springboard
  * @param {string} userMessage - The user's reprompt query
  * @param {string} previousContext - Previous generated text to use as context springboard
- * @returns {Promise<string>} The AI generated response in plain text format
+ * @returns {Promise<Object>} The AI generated response with { text: string, chunks: Array }
  */
 export async function generatePerplexityRepromptResponse(userMessage, previousContext = '') {
   try {
@@ -290,7 +354,6 @@ export async function generatePerplexityRepromptResponse(userMessage, previousCo
 
     // Log prompt length for debugging
     const fullPrompt = contextPrompt + userMessage;
-    console.log('Reprompt prompt length:', fullPrompt.length, 'characters');
     if (fullPrompt.length > 100000) {
       console.warn('Warning: Prompt is very long, may cause issues');
     }
@@ -311,8 +374,16 @@ export async function generatePerplexityRepromptResponse(userMessage, previousCo
       max_tokens: 4000
     };
 
+    // Log API call to terminal
+    console.log('\n' + '='.repeat(80));
+    console.log('PERPLEXITY API CALL - generatePerplexityRepromptResponse');
+    console.log('='.repeat(80));
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('\n--- PROMPT ---');
+    console.log(JSON.stringify(requestBody, null, 2));
+    console.log('--- END PROMPT ---\n');
+
     // Make API call to Perplexity
-    console.log('Calling Perplexity API for reprompt with model:', PERPLEXITY_MODEL);
     const response = await axios.post(
       PERPLEXITY_API_URL,
       requestBody,
@@ -324,7 +395,11 @@ export async function generatePerplexityRepromptResponse(userMessage, previousCo
       }
     );
 
-    console.log('Perplexity API response received, checking structure...');
+    // Log API response to terminal
+    console.log('--- RESPONSE ---');
+    console.log(JSON.stringify(response.data, null, 2));
+    console.log('--- END RESPONSE ---');
+    console.log('='.repeat(80) + '\n');
 
     // Extract the response content
     const responseContent = response.data.choices[0]?.message?.content;
@@ -347,20 +422,47 @@ export async function generatePerplexityRepromptResponse(userMessage, previousCo
       if (!text || text.trim().length === 0) {
         throw new Error('Empty response from Perplexity API');
       }
-      console.log('Successfully extracted text from Perplexity response (fallback), length:', text.length);
-      return text.trim();
+      console.log('--- AI GENERATED TEXT RESPONSE (FALLBACK) ---');
+      console.log(text.trim());
+      console.log('--- END AI GENERATED TEXT RESPONSE ---');
+      console.log('='.repeat(80) + '\n');
+      // Fallback: return as single chunk
+      return {
+        text: text.trim(),
+        chunks: [{
+          subheader: null,
+          fullText: text.trim(),
+          hasSubheader: false,
+          sentences: []
+        }]
+      };
     }
 
-    // Convert JSON schema response to plain text for frontend compatibility
-    const textResponse = convertJsonToText(jsonResponse);
+    // Convert JSON schema response to chunk structure
+    const repromptChunks = convertJsonToChunks(jsonResponse);
 
-    if (!textResponse || textResponse.trim().length === 0) {
-      console.error('Empty text after conversion - jsonResponse:', JSON.stringify(jsonResponse, null, 2));
+    if (!repromptChunks || repromptChunks.length === 0) {
+      console.error('Empty chunks after conversion - jsonResponse:', JSON.stringify(jsonResponse, null, 2));
       throw new Error('Empty response from Perplexity API after conversion');
     }
 
-    console.log('Successfully extracted text from Perplexity response, length:', textResponse.length);
-    return textResponse.trim();
+    // Also convert to text for logging and fallback
+    const textResponse = convertJsonToText(jsonResponse);
+
+    // Log the final AI-generated text response
+    console.log('--- AI GENERATED TEXT RESPONSE ---');
+    console.log(textResponse.trim());
+    console.log('--- END AI GENERATED TEXT RESPONSE ---');
+    console.log('--- REPROMPT CHUNKS ---');
+    console.log(JSON.stringify(repromptChunks, null, 2));
+    console.log('--- END REPROMPT CHUNKS ---');
+    console.log('='.repeat(80) + '\n');
+
+    // Return both text and chunks structure
+    return {
+      text: textResponse.trim(),
+      chunks: repromptChunks
+    };
   } catch (error) {
     console.error('Error calling Perplexity API for reprompt:', error);
     console.error('Error details:', {
