@@ -168,7 +168,7 @@ const IncrementalResponse = ({
     } else if (visibleChunks === minChunkIndex && onNavigate) {
       // At boundary - can't go back further, but can navigate to previous response if at first chunk
       if (minChunkIndex === 1) {
-        onNavigate(messageId, 0, 'previous');
+      onNavigate(messageId, 0, 'previous');
       }
     }
   };

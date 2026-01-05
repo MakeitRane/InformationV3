@@ -774,7 +774,7 @@ function EnhancedLearningApp() {
         ...prev,
         [messageId]: updatedPreviousVisible
       }));
-      
+
       // Completely replace current response chunks with new reprompt chunks
       console.log(`[handleReprompt] Replacing currentResponseChunks with ${repromptChunks.length} new chunks`);
       setCurrentResponseChunks(prev => ({
@@ -806,7 +806,7 @@ function EnhancedLearningApp() {
           updatedContent += ' ';
         }
       });
-
+      
       // Add first chunk of reprompt response (appears immediately)
       if (repromptChunks.length > 0) {
         // Check if new section starts
@@ -833,7 +833,7 @@ function EnhancedLearningApp() {
       
       // Update context
       setResponseContexts(prev => ({
-        ...prev,
+          ...prev,
         [messageId]: updatedContent.trim()
       }));
 
